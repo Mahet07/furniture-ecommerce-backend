@@ -31,3 +31,13 @@ build/
 
 ### VS Code ###
 .vscode/
+
+#custom ignores
+target/
+*.jar
+*.war
+*.class
+*.log
+/.idea/
+/.vscode/
+application.properties
