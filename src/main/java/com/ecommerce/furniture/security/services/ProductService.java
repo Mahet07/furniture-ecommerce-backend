@@ -1,37 +1,36 @@
 package com.ecommerce.furniture.security.services;
 
+import com.cloudinary.Cloudinary;
+import com.cloudinary.utils.ObjectUtils;
 import com.ecommerce.furniture.models.Category;
 import com.ecommerce.furniture.models.Product;
 import com.ecommerce.furniture.repository.ProductRepository;
-import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.*;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
 public class ProductService {
 
     private final ProductRepository productRepository;
-    private final Path uploadDir;
+    private final Cloudinary cloudinary;
 
     public ProductService(ProductRepository productRepository,
-                          @Value("${file.upload-dir:uploads/products}") String uploadDirStr) {
+                          @Value("${cloudinary.cloud_name}") String cloudName,
+                          @Value("${cloudinary.api_key}") String apiKey,
+                          @Value("${cloudinary.api_secret}") String apiSecret) {
         this.productRepository = productRepository;
-        this.uploadDir = Paths.get(uploadDirStr).toAbsolutePath().normalize();
-    }
-
-    @PostConstruct
-    private void init() {
-        try {
-            Files.createDirectories(uploadDir);
-        } catch (IOException e) {
-            throw new RuntimeException("Could not create upload directory", e);
-        }
+        this.cloudinary = new Cloudinary(ObjectUtils.asMap(
+                "cloud_name", cloudName,
+                "api_key", apiKey,
+                "api_secret", apiSecret,
+                "secure", true
+        ));
     }
 
     public List<Product> getAllProducts() {
@@ -46,69 +45,85 @@ public class ProductService {
         return productRepository.findById(id);
     }
 
+    // ✅ Create new product and upload image to Cloudinary
     public Product saveProductWithImage(String name, Double price, Category category, MultipartFile image) throws IOException {
-        String imageFileName = null;
+        String imageUrl = null;
 
         if (image != null && !image.isEmpty()) {
-            imageFileName = saveImageFile(image);
+            imageUrl = uploadToCloudinary(image);
         }
 
         Product product = new Product();
         product.setName(name);
         product.setPrice(price);
         product.setCategory(category);
-        product.setImage(imageFileName); // ✅ Only store file name
+        product.setImage(imageUrl);
 
         return productRepository.save(product);
     }
 
+    // ✅ Update product and replace Cloudinary image if needed
     public Product updateProductWithImage(Long id, String name, Double price, Category category, MultipartFile image) throws IOException {
         return productRepository.findById(id).map(existing -> {
             existing.setName(name);
             existing.setPrice(price);
             existing.setCategory(category);
 
-            if (image != null && !image.isEmpty()) {
-                if (existing.getImage() != null) {
-                    deleteFileIfExists(existing.getImage());
+            try {
+                if (image != null && !image.isEmpty()) {
+                    // Delete old image from Cloudinary if exists
+                    if (existing.getImage() != null && existing.getImage().contains("cloudinary.com")) {
+                        deleteFromCloudinary(existing.getImage());
+                    }
+                    String newImageUrl = uploadToCloudinary(image);
+                    existing.setImage(newImageUrl);
                 }
-                String imageFileName = saveImageFile(image);
-                existing.setImage(imageFileName);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to upload image", e);
             }
 
             return productRepository.save(existing);
         }).orElseThrow(() -> new RuntimeException("Product not found"));
     }
 
+    // ✅ Delete product (and Cloudinary image)
     public void deleteProduct(Long id) {
         productRepository.findById(id).ifPresent(product -> {
-            if (product.getImage() != null) {
-                deleteFileIfExists(product.getImage());
+            if (product.getImage() != null && product.getImage().contains("cloudinary.com")) {
+                deleteFromCloudinary(product.getImage());
             }
             productRepository.deleteById(id);
         });
     }
 
-    private String saveImageFile(MultipartFile imageFile) {
-        try {
-            String originalFileName = Paths.get(imageFile.getOriginalFilename()).getFileName().toString();
-            String fileName = System.currentTimeMillis() + "_" + originalFileName.replaceAll("\\s+", "_");
-            Path target = uploadDir.resolve(fileName);
-            Files.copy(imageFile.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+    // ✅ Upload file to Cloudinary
+    private String uploadToCloudinary(MultipartFile imageFile) throws IOException {
+        Map uploadResult = cloudinary.uploader().upload(imageFile.getBytes(),
+                ObjectUtils.asMap("folder", "furniture_products"));
+        return uploadResult.get("secure_url").toString();
+    }
 
-            // ✅ Only return the filename (not path)
-            return fileName;
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to save image", e);
+    // ✅ Delete file from Cloudinary
+    private void deleteFromCloudinary(String imageUrl) {
+        try {
+            String publicId = extractPublicId(imageUrl);
+            if (publicId != null) {
+                cloudinary.uploader().destroy(publicId, ObjectUtils.emptyMap());
+            }
+        } catch (Exception e) {
+            System.err.println("⚠️ Failed to delete image from Cloudinary: " + e.getMessage());
         }
     }
 
-    private void deleteFileIfExists(String filename) {
+    // ✅ Extract Cloudinary public ID from URL
+    private String extractPublicId(String imageUrl) {
         try {
-            Path filePath = uploadDir.resolve(filename);
-            Files.deleteIfExists(filePath);
-        } catch (IOException e) {
-            System.err.println("Failed to delete image: " + filename);
+            String[] parts = imageUrl.split("/");
+            String fileWithExt = parts[parts.length - 1]; // e.g. abc123.jpg
+            String publicId = fileWithExt.substring(0, fileWithExt.lastIndexOf(".")); // abc123
+            return "furniture_products/" + publicId; // include folder name
+        } catch (Exception e) {
+            return null;
         }
     }
 }
