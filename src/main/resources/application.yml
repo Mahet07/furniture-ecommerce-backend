@@ -1,0 +1,32 @@
+# src/main/resources/application.yml
+
+server:
+  port: ${PORT:8080}
+
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:mysql://localhost:3306/furnituredb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DB_USER:root}
+    password: ${DB_PASS:mahe}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+app:
+  jwtSecret: ${JWT_SECRET:q9nqHq4pJpB3uR8xk4N5Z2xXo8Fh2U7vQ9rR5nYtL3sD2mV6g0wR1cQ7h8TzK1sN}
+  jwtExpirationMs: 86400000
+
+file:
+  upload-dir: ${UPLOAD_DIR:uploads/images/}
